@@ -73,6 +73,10 @@ CONFIG = _load_config()
 # by path (SomeMap.mm:ID_123), which always works.
 MAPS = CONFIG.get("maps") or {}
 
+# Which alias a target with no "alias:" prefix refers to.  Configurable because
+# hard-coding it ("work") broke the moment a collection renamed its maps.
+DEFAULT_MAP = CONFIG.get("default") or (sorted(MAPS)[0] if MAPS else None)
+
 # friendly name -> Freeplane BUILTIN icon, taken from how this map already uses them
 ICONS = {
     "done":     "button_ok",
@@ -516,7 +520,7 @@ def all_maps():
     return [load(a) for a in MAPS]
 
 
-def parse_target(spec, default="work"):
+def parse_target(spec, default=None):
     """'store:tips/docker' -> (Map, Node).  Bare ids are searched everywhere."""
     spec = (spec or "").strip()
     if not spec:
@@ -543,7 +547,10 @@ def parse_target(spec, default="work"):
             if spec in m.by_id:
                 return m, m.by_id[spec]
         die("id %s not found in any map" % spec)
-    m = load(default)
+    alias_ = default or DEFAULT_MAP
+    if not alias_:
+        die("no default map: prefix the target with an alias, or set \"default\" in .mmrc")
+    m = load(alias_)
     return m, m.resolve(spec)
 
 
