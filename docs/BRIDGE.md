@@ -138,6 +138,7 @@ m.insert_child(m.root, b'<node TEXT=\"your question\" ID=\"ID_9001\" CREATED=\"1
 m.save()"
 mmd.py --once
 python3 -c "
-import json
-[print(json.loads(l)['op'], json.loads(l).get('text','')[:80]) for l in open('.mm-queue.jsonl')]"
+import json, os
+q = os.path.expanduser('~/.mm-bridge/queue.jsonl')   # mm.QUEUE
+[print(json.loads(l)['op'], json.loads(l).get('text','')[:80]) for l in open(q)]"
 ```

@@ -6,7 +6,7 @@ For day-to-day usage see the "Live mode" section of `CLAUDE.md`.
 ## How it fits together
 
 ```
-mm.py --live  ──append (flock)──>  ~/work/.mm-queue.jsonl
+mm.py --live  ──append (flock)──>  ~/.mm-bridge/queue.jsonl
                                           │
                                     (locked drain + truncate, 400ms poll)
                                           v
@@ -15,7 +15,7 @@ mm.py --live  ──append (flock)──>  ~/work/.mm-queue.jsonl
                                           v
                           open in-memory map (unsaved changes)
 
-                          ~/work/.mm-watch.status  <── heartbeat every ~3s
+                          ~/.mm-bridge/status.json  <── heartbeat every ~3s
 ```
 
 Freeplane stays the **only** process that ever writes the `.mm` file, which is what
