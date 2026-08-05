@@ -116,13 +116,14 @@ wanted it is a separate, deliberate decision — not a config tweak. Never use
 ## Running it
 
 ```bash
-./mmd.py            # foreground, Ctrl-C to stop
-./mmd.py --once     # single pass, for testing
-./mm.py session list
+mmd.py            # foreground, Ctrl-C to stop
+mmd.py --once     # single pass, for testing
+mm.py session list
 ```
 
-The daemon runs `claude` with `cwd=~/work`, so every session inherits `CLAUDE.md` — the
-`mm.py` rules, icon vocabulary and audit method come for free.
+The daemon runs `claude` with `cwd=mm.HERE`, i.e. the collection root it resolved (see
+"A map collection" in the README), so every session inherits that collection's
+`CLAUDE.md` — the `mm.py` rules, icon vocabulary and audit method come for free.
 
 ## Testing without Freeplane
 
@@ -135,7 +136,7 @@ import mm
 m = mm.Map('s','sessions/<file>.mm')
 m.insert_child(m.root, b'<node TEXT=\"your question\" ID=\"ID_9001\" CREATED=\"1\" MODIFIED=\"1\"><icon BUILTIN=\"launch\"/></node>')
 m.save()"
-./mmd.py --once
+mmd.py --once
 python3 -c "
 import json
 [print(json.loads(l)['op'], json.loads(l).get('text','')[:80]) for l in open('.mm-queue.jsonl')]"

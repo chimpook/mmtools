@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """mmd.py - bridge Freeplane session maps to Claude Code.
 
-    ./mmd.py            run in the foreground (Ctrl-C to stop)
-    ./mmd.py --once     one pass, then exit (handy for testing)
+    mmd.py            run in the foreground (Ctrl-C to stop)
+    mmd.py --once     one pass, then exit (handy for testing)
 
 How a turn works
     1. In a session map under ./sessions/, write a request node and mark it with
