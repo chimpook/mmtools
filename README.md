@@ -92,7 +92,9 @@ The bridge path is a constant, not config: queue commands carry the absolute pat
 map they target, so one queue serves every collection and the Groovy watcher needs no
 configuration at all. `MM_BRIDGE_DIR` relocates it for testing.
 
-`docs/BRIDGE.md` has the internals, the troubleshooting table, and the security
+`docs/ADDON.md` covers the add-on itself — architecture, the rebuild loop, permissions,
+troubleshooting, and why Freeplane's signed-script mechanism cannot be used here.
+`docs/BRIDGE.md` covers `mmd.py` and the session-map protocol, with the security
 measurements — **read it before widening any permission.** The short version: pattern
 scoping is *not* enforced in `claude -p`, so the session-map path runs read-only.
 
