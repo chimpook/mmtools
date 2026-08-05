@@ -17,15 +17,21 @@ None of this is specific to any map collection. A collection is just a directory
 
 ```bash
 git clone <this repo> ~/apps/mmtools
-~/apps/mmtools/install.sh          # symlinks the /mm skill into ~/.claude/skills/
+~/apps/mmtools/install.sh    # symlinks the /mm skill and mm.py/mmd.py into place
+```
+
+`install.sh` symlinks the `/mm` skill into `~/.claude/skills/` and the two commands into
+`~/.local/bin/`, so `mm.py` and `mmd.py` work from any directory and edits in this repo
+take effect immediately. Add this to your shell rc so alias addressing works outside a
+collection:
+
+```bash
+export MM_HOME="$HOME/mindmaps"      # your default map collection
 ```
 
 Then, in Freeplane: **Tools > Add-ons…** → install from file →
 `~/apps/mmtools/freeplane/mmwatch.addon.mm`, restart Freeplane, and arm it once per session
 via **Tools > MM Watch > Start map watcher**.
-
-Optionally put `~/apps/mmtools` on `PATH`, or symlink `mm.py` into a collection so `./mm.py`
-works there.
 
 ## A map collection
 
@@ -45,7 +51,12 @@ Any directory holding `.mm` files, with an `.mmrc` giving them names:
 - `sessions` — where session maps go, relative to the collection root
 
 Without an `.mmrc` there are no aliases and maps are addressed by path
-(`SomeMap.mm:ID_123`), which always works. `MM_HOME` overrides the upward search.
+(`SomeMap.mm:ID_123`), which always works.
+
+**Which collection a command uses:** the nearest ancestor of the cwd holding an `.mmrc`;
+failing that, `$MM_HOME`; failing that, this repo. So a collection you have cd'd into
+always wins, and `MM_HOME` only decides what "no prefix" means when you are outside every
+collection — which is what makes the aliases usable from an arbitrary directory.
 
 ## Feature 1 — `mm.py`
 

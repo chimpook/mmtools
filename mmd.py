@@ -30,7 +30,7 @@ import sys
 import time
 import uuid
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # symlink-safe
 import mm  # noqa: E402  - mm.py is the map library
 
 STATE = os.path.join(mm.SESSIONS, ".mmd-state.json")

@@ -37,23 +37,32 @@ import sys
 import time
 import xml.parsers.expat as expat
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# realpath, not abspath: the entry point is normally a symlink (~/.local/bin/mm.py
+# or a collection's ./mm.py), and this must land in the repo the code lives in.
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 
 
 def _find_root():
-    """Nearest ancestor of cwd holding .mmrc; else the script's own directory.
+    """Nearest ancestor of cwd holding .mmrc, else $MM_HOME, else the script's dir.
 
     Lets one copy of mm.py serve several map collections: the project decides
     which maps exist and what they are called, not the code.
+
+    cwd is searched before MM_HOME so that a collection you have cd'd into always
+    wins over the default one — MM_HOME only answers "which collection did you
+    mean?" when the cwd is not inside one at all, which is what makes the aliases
+    usable from an arbitrary directory.
     """
-    d = os.path.abspath(os.environ.get("MM_HOME") or os.getcwd())
+    d = os.path.abspath(os.getcwd())
     while True:
         if os.path.exists(os.path.join(d, ".mmrc")):
             return d
         parent = os.path.dirname(d)
         if parent == d:
-            return SCRIPT_DIR
+            break
         d = parent
+    home = os.environ.get("MM_HOME")
+    return os.path.abspath(home) if home else SCRIPT_DIR
 
 
 HERE = _find_root()          # the map collection's root
