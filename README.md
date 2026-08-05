@@ -16,7 +16,7 @@ None of this is specific to any map collection. A collection is just a directory
 ## Install
 
 ```bash
-git clone <this repo> ~/apps/mmtools
+git clone https://github.com/chimpook/mmtools ~/apps/mmtools
 ~/apps/mmtools/install.sh    # symlinks the /mm skill and mm.py/mmd.py into place
 ```
 
