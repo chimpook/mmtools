@@ -16,15 +16,15 @@ None of this is specific to any map collection. A collection is just a directory
 ## Install
 
 ```bash
-git clone <this repo> ~/mmtools
-~/mmtools/install.sh          # symlinks the /mm skill into ~/.claude/skills/
+git clone <this repo> ~/apps/mmtools
+~/apps/mmtools/install.sh          # symlinks the /mm skill into ~/.claude/skills/
 ```
 
 Then, in Freeplane: **Tools > Add-ons…** → install from file →
-`~/mmtools/freeplane/mmwatch.addon.mm`, restart Freeplane, and arm it once per session
+`~/apps/mmtools/freeplane/mmwatch.addon.mm`, restart Freeplane, and arm it once per session
 via **Tools > MM Watch > Start map watcher**.
 
-Optionally put `~/mmtools` on `PATH`, or symlink `mm.py` into a collection so `./mm.py`
+Optionally put `~/apps/mmtools` on `PATH`, or symlink `mm.py` into a collection so `./mm.py`
 works there.
 
 ## A map collection

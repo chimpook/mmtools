@@ -5,7 +5,7 @@ description: Mirror the current Claude Code session into a Freeplane mind map an
 
 # /mm — mirror this session into a Freeplane map
 
-`$MM` below means the mmtools checkout, normally `~/mmtools`. The tool is user-level;
+`$MM` below means the mmtools checkout, normally `~/apps/mmtools`. The tool is user-level;
 the **map collection** is whatever directory you are working in (it needs `.mm` files and
 an `.mmrc` — see `$MM/README.md`). If there is no collection, say so rather than creating
 a session map in the wrong place.
