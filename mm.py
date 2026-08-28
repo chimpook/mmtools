@@ -452,6 +452,20 @@ class Map:
         self.reindex()
         return blob
 
+    def set_color(self, n, color):
+        """Set (or replace) the COLOR attribute in a node's start tag."""
+        tag = self.data[n.start:n.inner]
+        blob = color.encode()
+        if re.search(rb'COLOR="[^"]*"', tag):
+            new = re.sub(rb'COLOR="[^"]*"', b'COLOR="%s"' % blob, tag)
+        elif tag.endswith(b"/>"):
+            new = tag[:-2] + b' COLOR="%s"/>' % blob
+        else:
+            new = tag[:-1] + b' COLOR="%s">' % blob
+        if new != tag:
+            self._splice(n.start, n.inner, new)
+            self.reindex()
+
     def set_icons(self, n, builtins):
         body = self.data[n.inner:(n.end - len(b"</node>") if not n.selfclose else n.inner)]
         keep = re.sub(rb'<icon BUILTIN="[^"]*"/>\s*', b"", body, count=len(n.icons)) \
@@ -662,7 +676,7 @@ def cmd_add(args):
         before = outcomes_so_far()
         enqueue({"op": "add", "map": m.path, "target": parent.id, "text": args.text,
                  "icons": [icon_builtin(i) for i in (args.icon or [])],
-                 "note": args.note or ""})
+                 "note": args.note or "", "color": args.color or ""})
         res = wait_for_result(before)
         if res is None:
             print("queued: add under %s  (watcher did not report back)" % parent.id)
@@ -677,6 +691,8 @@ def cmd_add(args):
     now = int(time.time() * 1000)
     bits = ['<node TEXT="%s" ID="%s" CREATED="%d" MODIFIED="%d"'
             % (esc(args.text), nid, now, now)]
+    if args.color:
+        bits.append(' COLOR="%s"' % esc(args.color))
     if args.link:
         bits.append(' LINK="%s"' % esc(args.link))
     open_tag = "".join(bits) + ">"
@@ -692,6 +708,23 @@ def cmd_add(args):
     m.save()
     print("added %s under %s" % (nid, m.path_of(m.by_id[nid].parent)))
     print("  %s" % m.by_id[nid].label(88))
+
+
+def cmd_color(args):
+    if not re.match(r"^#[0-9a-fA-F]{6}$", args.color):
+        die("color must be a #rrggbb hex value, got: %s" % args.color)
+    m, n = parse_target(args.target)
+    if args.live:
+        enqueue({"op": "color", "map": m.path, "target": n.id, "color": args.color})
+        print("queued: color on %s  %s" % (n.id, n.label(60)))
+        return
+    guard(args)
+    m.set_color(n, args.color)
+    n = m.by_id[n.id]
+    m._touch(n)
+    m.reindex()
+    m.save()
+    print("colored %s %s  %s" % (n.id, args.color, n.label(60)))
 
 
 def cmd_icon(args):
@@ -900,6 +933,8 @@ def cmd_post(args):
                "icons": [icon_builtin(i) for i in (d.get("icons") or [])]}
         if d.get("note"):
             out["note"] = str(d["note"])
+        if d.get("color"):
+            out["color"] = str(d["color"])
         if d.get("children"):
             out["children"] = [clean(c) for c in d["children"]]
         return out
@@ -971,11 +1006,20 @@ def main():
     p.add_argument("--icon", action="append")
     p.add_argument("--note")
     p.add_argument("--link")
+    p.add_argument("--color", help='node text color, #rrggbb')
     p.add_argument("--first", action="store_true")
     p.add_argument("--live", action="store_true",
                    help="hand the edit to the Freeplane watcher instead of the file")
     p.add_argument("--force", action="store_true")
     p.set_defaults(fn=cmd_add)
+
+    p = sub.add_parser("color", help="set node text color")
+    p.add_argument("target")
+    p.add_argument("color", help="#rrggbb hex value")
+    p.add_argument("--live", action="store_true",
+                   help="hand the edit to the Freeplane watcher instead of the file")
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(fn=cmd_color)
 
     p = sub.add_parser("icon", help="set status icons")
     p.add_argument("target")

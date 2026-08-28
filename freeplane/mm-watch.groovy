@@ -61,6 +61,7 @@ build = { parent, java.util.Map spec ->
     def kid = parent.createChild(spec.text as String)
     (spec.icons ?: []).each { kid.icons.add(it as String) }
     if (spec.note) kid.note = spec.note as String
+    if (spec.color) try { kid.style.textColorCode = spec.color as String } catch (Throwable ignored) { }
     (spec.children ?: []).each { child -> build(kid, child as java.util.Map) }
     return kid
 }
@@ -89,6 +90,9 @@ def apply = { java.util.Map cmd ->
         case 'text':
             target.text = cmd.text as String
             return "OK text ${target.id}"
+        case 'color':
+            target.style.textColorCode = cmd.color as String
+            return "OK color ${target.id}"
         default:
             return "ERR unknown op: ${cmd.op}"
     }
