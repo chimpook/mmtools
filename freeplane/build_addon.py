@@ -18,7 +18,7 @@ SRC = os.path.join(HERE, "mm-watch.groovy")
 OUT = os.path.join(HERE, "mmwatch.addon.mm")
 
 NAME = "mmwatch"
-VERSION = "v0.1.0"
+VERSION = "v0.2.0"
 AUTHOR = "Sergei Veselovskii"
 FP_FROM = "v1.12.0"
 SCRIPT = "mm-watch.groovy"
