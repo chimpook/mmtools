@@ -185,20 +185,25 @@ FAILED = "button_cancel"
 DONE = "button_ok"
 
 
-def style_hooks():
+def style_hooks(required=True):
     """The MapStyle + edge-colour hooks, lifted from the working map so a new
-    session map renders icons and colours identically."""
+    session map renders icons and colours identically.  With required=False a
+    collection without maps yields b"" and Freeplane applies its defaults."""
     src = CONFIG.get("style_from") or (sorted(MAPS)[0] if MAPS else None)
     if src in MAPS:
         src = MAPS[src]
     if not src:
         cands = sorted(f for f in os.listdir(HERE) if f.endswith(".mm"))
         if not cands:
+            if not required:
+                return b""
             die("no .mm file in %s to take a MapStyle from" % HERE)
         src = cands[0]
     data = open(os.path.join(HERE, src), "rb").read()
     m = re.search(rb'<hook NAME="MapStyle".*?</hook>', data, re.S)
     if not m:
+        if not required:
+            return b""
         die("cannot find MapStyle hook in %s" % src)
     out = m.group()
     e = re.search(rb'<hook NAME="AutomaticEdgeColor"[^>]*/>', data)
@@ -372,16 +377,16 @@ class Map:
 
     # ---------- lookup ----------
 
-    def resolve(self, spec):
+    def resolve(self, spec, start=None):
         spec = (spec or "").strip()
         if not spec:
-            return self.root
+            return start or self.root
         if re.fullmatch(r"ID_\d+", spec):
             n = self.by_id.get(spec)
             if not n:
                 die("id %s not found in %s" % (spec, self.alias))
             return n
-        cur = self.root
+        cur = start or self.root
         for seg in [s for s in spec.split("/") if s.strip()]:
             key = seg.strip().lower()
             exact = [k for k in cur.kids if (k.text or "").strip().lower() == key]
@@ -979,6 +984,400 @@ def cmd_check(args):
     sys.exit(0 if ok else 1)
 
 
+# ---------------- export / import: Markdown as the shared, recoverable form ----------------
+#
+# The map is the master; the Markdown is what the team reads in the repo and what the
+# map can be rebuilt from if the .mm file is lost.  Format (one node per line):
+#
+#   # root text                          H1 = map root, H2.. = the first --headings levels
+#   ## ✓ branch <!-- ID_12 #d35400 -->   icon tokens first, hidden metadata in a comment
+#   > note paragraph                     blockquote lines under a node are its note
+#   - ⚠ [text](url)                      deeper levels are nested bullets, 2 spaces/level
+#     - child <!-- {icon:list} -->       an icon with no glyph is written as {icon:NAME}
+#
+# Dropped on purpose: fold state, fonts, CREATED/MODIFIED, layout attributes.  Kept:
+# text, hierarchy, icons, notes (as plain paragraphs), links, colour; node ids and
+# arrow links with --ids.  `mm.py roundtrip` measures exactly what a map would lose.
+
+MARK2BUILTIN = {}
+for _b, _s in MARK.items():
+    MARK2BUILTIN.setdefault(_s, _b)      # first wins: "✓" is button_ok, not yes
+_ICON_TOKENS = sorted(MARK2BUILTIN, key=len, reverse=True)
+_HEAD_RE = re.compile(r"^(#{1,6})(?:\s+(.*))?$")
+_BULLET_RE = re.compile(r"^(\s*)[-*+](?:\s+(.*))?$")
+_QUOTE_RE = re.compile(r"^\s*>\s?(.*)$")
+_COMMENT_RE = re.compile(r"\s*<!--\s*(.*?)\s*-->")
+_LINK_RE = re.compile(r"^\[(.*)\]\((\S+)\)$", re.S)
+
+
+def _own_body(m, n):
+    """A node's XML between its start tag and its first child (or its end)."""
+    if n.selfclose:
+        return ""
+    hi = n.kids[0].start if n.kids else n.end - len(b"</node>")
+    body = m.data[n.inner:hi].decode("utf-8", "replace")
+    return re.sub(r"<hook\b[^>]*/>|<hook\b.*?</hook>", "", body, flags=re.S)
+
+
+def _rich_paragraphs(xml):
+    """Plain-text paragraphs of a Freeplane richcontent block."""
+    t = re.search(r"<text>(.*?)</text>", xml, re.S)
+    if t:
+        return [l.rstrip() for l in html.unescape(t.group(1)).split("\n")]
+    body = re.search(r"<body>(.*?)</body>", xml, re.S)
+    body = body.group(1) if body else xml
+    body = re.sub(r"<br\s*/?>", "\n", body, flags=re.I)
+    paras = re.split(r"</?(?:p|li|h[1-6]|div|ul|ol)\b[^>]*>", body, flags=re.I)
+    out = []
+    for p in paras:
+        p = html.unescape(re.sub(r"<[^>]+>", "", p))
+        lines = [" ".join(l.split()) for l in p.split("\n")]
+        lines = [l for l in lines if l]
+        if lines:
+            out.extend(lines)
+    return out
+
+
+def node_export_text(m, n):
+    if n.text is not None:
+        return n.text
+    mt = re.search(r'<richcontent TYPE="NODE".*?</richcontent>', _own_body(m, n), re.S)
+    return "\n".join(_rich_paragraphs(mt.group())) if mt else ""
+
+
+def node_note_lines(m, n):
+    """Own note (and details, which Markdown cannot tell apart) as paragraphs."""
+    out = []
+    for kind in ("NOTE", "DETAILS"):
+        for mt in re.finditer(r'<richcontent TYPE="%s"[^>]*?(?:/>|>.*?</richcontent>)' % kind,
+                              _own_body(m, n), re.S):
+            out.extend(_rich_paragraphs(mt.group()))
+    return out
+
+
+def node_color(m, n):
+    mt = re.search(rb'\sCOLOR="([^"]*)"', m.data[n.start:n.inner])
+    return mt.group(1).decode() if mt else None
+
+
+def node_arrows(m, n):
+    return re.findall(r'<arrowlink [^>]*?DESTINATION="(ID_\d+)"', _own_body(m, n))
+
+
+def export_markdown(m, root, headings=2, ids=False, exclude=()):
+    """Render a subtree as Markdown; returns (text, stats)."""
+    skip = set(id(x) for x in exclude)
+    used_icons, stats = {}, {"nodes": 0, "notes": 0, "excluded": len(exclude)}
+    out = []
+
+    def line_for(n):
+        toks = []
+        for i in n.icons:
+            used_icons[i] = used_icons.get(i, 0) + 1
+            toks.append(MARK.get(i) or "{icon:%s}" % i)
+        text = "<br>".join(l.strip() for l in node_export_text(m, n).split("\n")).strip()
+        if n.link:
+            text = "[%s](%s)" % (text, n.link)
+        meta = []
+        if ids and n.id:
+            meta.append(n.id)
+        c = node_color(m, n)
+        if c:
+            meta.append(c)
+        if ids:
+            meta.extend("->%s" % d for d in node_arrows(m, n))
+        s = " ".join(toks + [text]) if text or toks else ""
+        return s + (" <!-- %s -->" % " ".join(meta) if meta else "")
+
+    def walk(n, depth):
+        if id(n) in skip:
+            return
+        stats["nodes"] += 1
+        rel = depth
+        note = node_note_lines(m, n)
+        if rel <= headings:
+            if out:
+                out.append("")
+            out.append("#" * (rel + 1) + " " + line_for(n))
+            for l in note:
+                out.append("> " + l if l else ">")
+            if note:
+                out.append("")
+        else:
+            pad = "  " * (rel - headings - 1)
+            out.append(pad + "- " + line_for(n))
+            for l in note:
+                out.append(pad + "  > " + l if l else pad + "  >")
+        if note:
+            stats["notes"] += 1
+        for k in n.kids:
+            walk(k, depth + 1)
+
+    walk(root, 0)
+    legend = " · ".join("%s %s" % (MARK.get(i, "{icon:%s}" % i), BUILTIN2NAME.get(i, i))
+                        for i in sorted(used_icons, key=lambda i: -used_icons[i]))
+    head = ["<!-- Generated by `mm.py export` from %s on %s." % (m.path_of(root),
+                                                                   time.strftime("%Y-%m-%d")),
+            "     The mind map is the master: edits made here are overwritten by the next",
+            "     export. Rebuild the map from this file with `mm.py import FILE --to NEW.mm`."]
+    if legend:
+        head.append("     Icons: %s." % legend)
+    if exclude:
+        head.append("     Not exported: %s." % "; ".join(x.label(40) for x in exclude))
+    head[-1] += " -->"
+    return "\n".join(head + out) + "\n", stats
+
+
+def parse_markdown(text):
+    """Markdown (as written by export_markdown) -> nested dicts.  Lenient: any
+    bullet style, 2- or 4-space indents, tabs, stray paragraphs become notes."""
+    root, stack, last, in_comment = None, [], None, False
+    heading_depth, indent_unit = -1, None
+
+    def make(s):
+        n = {"text": "", "icons": [], "link": None, "note": [], "kids": [],
+             "id": None, "color": None, "arrows": []}
+        for c in _COMMENT_RE.findall(s):
+            for tok in c.split():
+                if re.fullmatch(r"ID_\d+", tok):
+                    n["id"] = tok
+                elif re.fullmatch(r"#[0-9a-fA-F]{6}", tok):
+                    n["color"] = tok
+                elif re.fullmatch(r"->ID_\d+", tok):
+                    n["arrows"].append(tok[2:])
+        s = _COMMENT_RE.sub("", s).strip()
+        while True:
+            mt = re.match(r"\{icon:([^}]+)\}(?:\s+|$)", s)
+            if mt:
+                n["icons"].append(mt.group(1))
+                s = s[mt.end():]
+                continue
+            for tok in _ICON_TOKENS:
+                if s == tok or s.startswith(tok + " "):
+                    n["icons"].append(MARK2BUILTIN[tok])
+                    s = s[len(tok):].lstrip()
+                    break
+            else:
+                break
+        mt = _LINK_RE.match(s)
+        if mt:
+            s, n["link"] = mt.group(1), mt.group(2)
+        n["text"] = re.sub(r"<br\s*/?>", "\n", s, flags=re.I).strip()
+        return n
+
+    def attach(depth, n, lineno):
+        nonlocal root, last
+        while stack and stack[-1][0] >= depth:
+            stack.pop()
+        if not stack:
+            if root is not None:
+                die("line %d: a second top-level node (%r); a map has exactly one root - "
+                    "the H1 (or the single top bullet)" % (lineno, n["text"][:40]))
+            root = n
+        else:
+            stack[-1][1]["kids"].append(n)
+        stack.append((depth, n))
+        last = n
+
+    for lineno, raw in enumerate(text.splitlines(), 1):
+        line = raw.rstrip()
+        s = line.strip()
+        if in_comment:
+            in_comment = "-->" not in s
+            continue
+        if not s:
+            continue
+        if s.startswith("<!--"):
+            in_comment = "-->" not in s
+            continue
+        mt = _HEAD_RE.match(line)
+        if mt:
+            heading_depth = len(mt.group(1)) - 1
+            attach(heading_depth, make(mt.group(2) or ""), lineno)
+            continue
+        mt = _BULLET_RE.match(line)
+        if mt:
+            ind = len(mt.group(1).expandtabs(2))
+            if ind and indent_unit is None:
+                indent_unit = ind
+            depth = heading_depth + 1 + (ind // (indent_unit or 2))
+            attach(depth, make(mt.group(2) or ""), lineno)
+            continue
+        mt = _QUOTE_RE.match(line)
+        if last is not None:
+            last["note"].append(mt.group(1) if mt else s)
+    if root is None:
+        die("no nodes found in the Markdown")
+    return root
+
+
+def build_map_xml(root, style=b""):
+    """Nested dicts -> a complete Freeplane .mm document (bytes)."""
+    now = int(time.time() * 1000)
+    known, counter = set(), [0]
+
+    def collect(n):
+        if n["id"]:
+            if n["id"] in known:
+                n["id"] = None          # duplicate ids in the file: reassign
+            else:
+                known.add(n["id"])
+        for k in n["kids"]:
+            collect(k)
+
+    def assign(n):
+        while not n["id"]:
+            counter[0] += 1
+            cand = "ID_%d" % counter[0]
+            if cand not in known:
+                known.add(cand)
+                n["id"] = cand
+        for k in n["kids"]:
+            assign(k)
+
+    collect(root)
+    assign(root)
+    dropped = []
+
+    def emit(n, out, depth):
+        attrs = 'TEXT="%s" ID="%s" CREATED="%d" MODIFIED="%d"' % (esc(n["text"]), n["id"],
+                                                                 now, now)
+        if depth == 0:
+            attrs += ' FOLDED="false" STYLE="oval"'
+        if n["color"]:
+            attrs += ' COLOR="%s"' % n["color"]
+        if n["link"]:
+            attrs += ' LINK="%s"' % esc(n["link"])
+        out.append("<node %s>" % attrs)
+        if depth == 0:
+            out.append('<font SIZE="18"/>')
+            if style:
+                out.append(style.decode("utf-8"))
+        for i in n["icons"]:
+            out.append('<icon BUILTIN="%s"/>' % esc(i))
+        for d in n["arrows"]:
+            if d in known:
+                out.append('<arrowlink DESTINATION="%s"/>' % d)
+            else:
+                dropped.append((n["id"], d))
+        if n["note"]:
+            out.append('<richcontent TYPE="NOTE" CONTENT-TYPE="xml/">\n<html>\n  <head>\n  '
+                       '</head>\n  <body>\n' +
+                       "".join("    <p>\n      %s\n    </p>\n" % esc_text(l or "")
+                               for l in n["note"]) + '  </body>\n</html>\n</richcontent>')
+        for k in n["kids"]:
+            emit(k, out, depth + 1)
+        out.append("</node>")
+
+    out = ['<map version="freeplane 1.12.15">',
+           '<!--To view this file, download free mind mapping software Freeplane from '
+           'https://www.freeplane.org -->']
+    emit(root, out, 0)
+    out.append("</map>")
+    data = ("\n".join(out) + "\n").encode("utf-8")
+    expat.ParserCreate().Parse(data, True)          # never emit broken XML
+    return data, dropped
+
+
+def fingerprints(m, root, exclude=()):
+    """(depth, text, icons, note, link, color) per node in tree order - what the
+    Markdown form promises to preserve."""
+    skip = set(id(x) for x in exclude)
+    out = []
+
+    def walk(n, d):
+        if id(n) in skip:
+            return
+        out.append((d, " ".join(node_export_text(m, n).split()), tuple(n.icons),
+                    tuple(node_note_lines(m, n)), n.link, node_color(m, n)))
+        for k in n.kids:
+            walk(k, d + 1)
+
+    walk(root, 0)
+    return out
+
+
+def _resolve_excludes(m, root, specs):
+    """--exclude values are paths under the exported node, or ids anywhere in the map."""
+    return [m.resolve(s, start=root) for s in specs or []]
+
+
+def cmd_export(args):
+    m, n = parse_target(args.target or ((DEFAULT_MAP or "") + ":"))
+    exclude = _resolve_excludes(m, n, args.exclude)
+    text, st = export_markdown(m, n, headings=max(0, min(args.headings, 5)), ids=args.ids,
+                               exclude=exclude)
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        print("wrote %s: %d nodes, %d notes%s" % (
+            args.output, st["nodes"], st["notes"],
+            (", %d branch(es) excluded" % st["excluded"]) if st["excluded"] else ""))
+    else:
+        sys.stdout.write(text)
+
+
+def cmd_import(args):
+    if os.path.exists(args.to) and not args.overwrite:
+        die("%s exists; pass --overwrite to replace it" % args.to)
+    if os.path.exists(args.to) and freeplane_running() and not args.force:
+        die("Freeplane is running and might have %s open; close it or pass --force"
+            % args.to)
+    text = open(args.mdfile, encoding="utf-8").read()
+    root = parse_markdown(text)
+    data, dropped = build_map_xml(root, style_hooks(required=False))
+    tmp = args.to + ".tmp"
+    with open(tmp, "wb") as fh:
+        fh.write(data)
+    os.replace(tmp, args.to)
+    m = Map(os.path.basename(args.to), args.to)
+    notes = sum(1 for x in m.nodes if node_note_lines(m, x))
+    print("wrote %s: %d nodes, %d with icons, %d notes" % (
+        args.to, len(m.nodes), sum(1 for x in m.nodes if x.icons), notes))
+    for src, dst in dropped:
+        print("  dropped arrow %s -> %s (target not in this file)" % (src, dst))
+    if not any(re.search(r"<!--[^>]*\bID_\d+", l) for l in text.splitlines()):
+        print("  note: the file carried no node ids (export without --ids); ids are fresh, "
+              "so any alias:ID_… references to the old map no longer resolve")
+
+
+def cmd_roundtrip(args):
+    """Export, re-import into a scratch file, and diff the fingerprints."""
+    m, n = parse_target(args.target or ((DEFAULT_MAP or "") + ":"))
+    exclude = _resolve_excludes(m, n, args.exclude)
+    text, st = export_markdown(m, n, headings=args.headings, ids=True, exclude=exclude)
+    data, dropped = build_map_xml(parse_markdown(text), b"")
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".mm", delete=False) as fh:
+        fh.write(data)
+        tmp = fh.name
+    try:
+        m2 = Map("roundtrip", tmp)
+        a, b = fingerprints(m, n, exclude), fingerprints(m2, m2.root)
+    finally:
+        os.unlink(tmp)
+    names = ("depth", "text", "icons", "note", "link", "color")
+    losses = 0
+    for i, (x, y) in enumerate(zip(a, b)):
+        if x != y:
+            losses += 1
+            if losses <= args.limit:
+                print("node %d %r:" % (i, x[1][:50]))
+                for nm, p, q in zip(names, x, y):
+                    if p != q:
+                        print("    %-6s map: %r\n    %-6s md : %r" % (nm, p, "", q))
+    if len(a) != len(b):
+        losses += abs(len(a) - len(b))
+        print("node count differs: map %d, re-import %d" % (len(a), len(b)))
+    for src, dst in dropped:
+        print("arrow %s -> %s would be dropped (points outside the exported subtree)"
+              % (src, dst))
+    print("%s: %d nodes compared, %d difference(s)%s" % (
+        m.path_of(n), len(a), losses,
+        " - lossless for text/hierarchy/icons/notes/links/colour" if not losses else ""))
+    sys.exit(1 if losses else 0)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1079,6 +1478,31 @@ def main():
     sub.add_parser("watch", help="live-watcher status").set_defaults(fn=cmd_watch)
     sub.add_parser("stats", help="counts per map").set_defaults(fn=cmd_stats)
     sub.add_parser("check", help="validate all maps").set_defaults(fn=cmd_check)
+
+    p = sub.add_parser("export", help="render a map or subtree as Markdown")
+    p.add_argument("target", nargs="?", help="alias:path or id; default: the default map")
+    p.add_argument("-o", "--output", help="file to write (default: stdout)")
+    p.add_argument("--headings", type=int, default=2,
+                   help="levels below the root rendered as headings, deeper = bullets (2)")
+    p.add_argument("--ids", action="store_true",
+                   help="keep node ids and arrow links in hidden comments (for recovery)")
+    p.add_argument("--exclude", action="append", metavar="PATH",
+                   help="subtree (path under target, or id) to leave out; repeatable")
+    p.set_defaults(fn=cmd_export)
+
+    p = sub.add_parser("import", help="rebuild a map from exported Markdown")
+    p.add_argument("mdfile")
+    p.add_argument("--to", required=True, metavar="NEW.mm", help="map file to create")
+    p.add_argument("--overwrite", action="store_true")
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(fn=cmd_import)
+
+    p = sub.add_parser("roundtrip", help="what would export+import lose? (exit 1 if anything)")
+    p.add_argument("target", nargs="?")
+    p.add_argument("--headings", type=int, default=2)
+    p.add_argument("--exclude", action="append", metavar="PATH")
+    p.add_argument("-n", "--limit", type=int, default=20)
+    p.set_defaults(fn=cmd_roundtrip)
 
     args = ap.parse_args()
     args.fn(args)
