@@ -1139,11 +1139,11 @@ def parse_markdown(text):
              "id": None, "color": None, "arrows": []}
         for c in _COMMENT_RE.findall(s):
             for tok in c.split():
-                if re.fullmatch(r"ID_\d+", tok):
+                if re.fullmatch(r"ID_\w+", tok):
                     n["id"] = tok
                 elif re.fullmatch(r"#[0-9a-fA-F]{6}", tok):
                     n["color"] = tok
-                elif re.fullmatch(r"->ID_\d+", tok):
+                elif re.fullmatch(r"->ID_\w+", tok):
                     n["arrows"].append(tok[2:])
         s = _COMMENT_RE.sub("", s).strip()
         while True:
@@ -1336,7 +1336,7 @@ def cmd_import(args):
         args.to, len(m.nodes), sum(1 for x in m.nodes if x.icons), notes))
     for src, dst in dropped:
         print("  dropped arrow %s -> %s (target not in this file)" % (src, dst))
-    if not any(re.search(r"<!--[^>]*\bID_\d+", l) for l in text.splitlines()):
+    if not any(re.search(r"<!--[^>]*\bID_\w+", l) for l in text.splitlines()):
         print("  note: the file carried no node ids (export without --ids); ids are fresh, "
               "so any alias:ID_… references to the old map no longer resolve")
 
