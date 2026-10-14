@@ -180,6 +180,8 @@ SESSIONS = os.path.join(HERE, CONFIG.get("sessions") or "sessions")
 # icons the Freeplane<->Claude bridge uses (all verified Freeplane builtins)
 TRIGGER = "launch"        # you mark this and save -> the request is sent
 RUNNING = "hourglass"
+QUEUED = "hourglass"      # /mm bridge: seen on save, waiting for the session
+WORKING = "wizard"        # /mm bridge: the session is answering it now
 TOOLCALL = "executable"
 FAILED = "button_cancel"
 DONE = "button_ok"
@@ -227,7 +229,7 @@ def new_session(title):
             "  <body>\n"
             "    <p>Write a request as a child node, mark it with the launch icon, then SAVE.</p>\n"
             "    <p>Saving is what sends it. Replies arrive as child nodes of the request.</p>\n"
-            "    <p>The request is marked with an hourglass while running, a tick when done.</p>\n"
+            "    <p>An hourglass means it was received, a gear that it is being worked on, a tick when done.</p>\n"
             "    <p>MM Watch must be armed: Tools &gt; MM Watch &gt; Start map watcher.</p>\n"
             "  </body>\n</html>\n</richcontent>")
     xml = (b'<map version="freeplane 1.12.15">\n'
@@ -910,8 +912,35 @@ def cmd_inbox(args):
         print("marked handled: %s" % " ".join(args.done))
         return
     m = Map("session", args.mapfile)
+
+    def mark(n, status):
+        # swap the status icon, keeping launch and anything the user added: if
+        # they save again before the answer lands, the node must still be pending
+        icons = [i for i in n.icons if i not in (QUEUED, WORKING)] + [status]
+        enqueue({"op": "icon", "map": key, "target": n.id, "clear": True, "icons": icons})
+
+    if args.start:
+        for nid in args.start:
+            if nid not in m.by_id:
+                die("no node %s in %s" % (nid, args.mapfile))
+            mark(m.by_id[nid], WORKING)
+        print("working: %s" % " ".join(args.start))
+        return
     pending = [n for n in m.nodes if TRIGGER in n.icons and n.id not in seen]
-    if not pending:
+    if args.ack:
+        # receipt for the user, run from the save monitor: mark each request the
+        # first time it is seen, and print only those, so a plain save is silent
+        akey = "acked:" + key
+        acked = set(st.get(akey, []))
+        pending = [n for n in pending if n.id not in acked]
+        if not pending:
+            return
+        for n in pending:
+            mark(n, QUEUED)
+        st = _handled()
+        st[akey] = sorted(set(st.get(akey, [])) | {n.id for n in pending})
+        _save_handled(st)
+    elif not pending:
         print("nothing pending")
         return
     for n in pending:
@@ -1468,6 +1497,9 @@ def main():
     p = sub.add_parser("inbox", help="pending launch-marked nodes in a session map")
     p.add_argument("mapfile")
     p.add_argument("--done", nargs="*", help="mark these node ids handled")
+    p.add_argument("--start", nargs="+", help="show these requests as being worked on (live)")
+    p.add_argument("--ack", action="store_true",
+                   help="mark newly seen requests as received (live); print only those")
     p.set_defaults(fn=cmd_inbox)
 
     p = sub.add_parser("post", help="enqueue a nested node spec (JSON on stdin)")

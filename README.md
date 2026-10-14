@@ -72,6 +72,7 @@ mm.py rm <target> --yes
 mm.py mv <target> --to <parent>         works across maps
 mm.py post <mapfile> <target>           enqueue a nested node spec (JSON on stdin)
 mm.py inbox <mapfile> [--done ID...]    pending launch-marked nodes
+mm.py inbox <mapfile> --ack|--start ID  mark requests ⧗ received / ⚙ working (live)
 mm.py export [target] [-o F] [--headings N] [--ids] [--exclude P]   map -> Markdown
 mm.py import <file.md> --to <new.mm>    Markdown -> a fresh map (recovery)
 mm.py roundtrip [target]                what would export+import lose? exit 1 if anything

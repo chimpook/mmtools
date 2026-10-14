@@ -62,21 +62,27 @@ before relying on it.
 
 ## Step 3 — arm the change monitor
 
-`inotifywait` is not installed on this machine, so poll mtime. One event per save:
+`inotifywait` is not installed on this machine, so poll mtime. On each save the monitor
+runs `inbox --ack`, which marks every request it has not seen before with ⧗ (live) and
+prints it. That gives the user a receipt within a second, even while you are mid-turn,
+and a save with no new request prints nothing and wakes nobody:
 
 ```
 Monitor(
   command: 'M="<map path>"; last=$(stat -c %Y "$M"); while true; do
               cur=$(stat -c %Y "$M" 2>/dev/null || echo "$last");
-              if [ "$cur" != "$last" ]; then echo "map saved $(date +%H:%M:%S)"; last=$cur; fi;
+              if [ "$cur" != "$last" ]; then last=$cur;
+                $MM/mm.py inbox "$M" --ack 2>&1 | sed "s/^/request: /"; fi;
               sleep 1; done',
-  description: 'session map saves: <basename>',
+  description: 'session map requests: <basename>',
   persistent: true,
   timeout_ms: 3600000,
 )
 ```
 
-Keep the map path in mind for the rest of the session — every later step needs it.
+(Write `$MM` out as the real path, since the Monitor's shell won't have it set.)
+
+Keep the map path in mind for the rest of the session. Every later step needs it.
 
 ## Step 4 — the two-way loop
 
@@ -100,28 +106,45 @@ Rules that matter:
 - If you ask the user a question, post it as a `?` node with the alternatives as
   children so it can be answered in either surface.
 
-**map → console.** When a `map saved` event arrives:
+**map → console.** A `request:` event means the user marked a node and saved. The ⧗
+is already on it. Then:
 
 ```bash
-$MM/mm.py inbox "<map path>"                    # launch-marked nodes not yet handled
+$MM/mm.py inbox "<map path>"                    # all pending requests, with children
 ```
 
-For each pending node: treat its text (plus any children the user wrote under it) as a
-message from the user, answer it **in the console and in the map**, then
+Take each pending node in order, and run these three commands in sequence for each one:
 
 ```bash
-$MM/mm.py icon "<map path>:<node-id>" --set done --live   # visible tick
+$MM/mm.py inbox "<map path>" --start <node-id>            # ⧗ -> ⚙, before you think
+# ... answer it in the console AND post the digest into the map ...
+$MM/mm.py icon "<map path>:<node-id>" --set done --live   # ⚙ -> ✓
 $MM/mm.py inbox "<map path>" --done <node-id>             # so it does not re-fire
 ```
+
+Treat the node's text, plus any children the user wrote under it, as a message from
+the user. `--start` comes first, before any reading or tool calls. It tells the user
+you are working on it, as opposed to it waiting in the queue.
+
+What each state means to the user:
+
+| Icons | Meaning |
+| --- | --- |
+| 🚀 | marked, not saved yet (or the monitor is down) |
+| 🚀 ⧗ | received, queued behind whatever you are doing |
+| 🚀 ⚙ | you are answering it now |
+| ✓ | answered, reply is in the map |
+
+🚀 stays on the node until ✓. If the user saves while it is ⧗ or ⚙, the node on disk
+still reads as pending, so nothing gets lost. If a session dies, the node is left on
+⧗ or ⚙, which correctly shows that it was picked up but never answered.
 
 Note the `<map path>:` prefix on the icon target. A bare id only resolves inside the
 three registered maps (work/archive/store); session maps need the path form.
 
-Both are needed. The tick lands in Freeplane's memory only; the on-disk file keeps its
-launch icon until the next save, so `--done` is what actually prevents a repeat.
-
-A `map saved` event with nothing pending means the user just saved — say nothing and
-carry on.
+`--done` and the tick are both needed. The tick lands in Freeplane's memory only, and
+the on-disk file keeps its launch icon until the next save. `--done` is what actually
+prevents a repeat.
 
 ## Step 5 — closing the session
 
@@ -135,7 +158,8 @@ work happens, `state` is what survives it.
 
 If `/mm` is invoked and `$MM/mm.py session list` already shows a map for this task, do not
 start over: reuse it, re-arm the Monitor, and post a `resumed <time>` node so the gap is
-visible in the map.
+visible in the map. Then run `$MM/mm.py inbox "<map path>"`: anything left on ⧗ or ⚙
+from the dead session is still pending, so answer it.
 
 ## Failure modes, and what they look like
 
@@ -145,6 +169,7 @@ visible in the map.
 | nodes never appear | watcher not armed, or the map is not the one open — the watcher scans open maps by canonical path |
 | `SKIP map not open` in the Freeplane log | the session map was closed; reopen it |
 | a request fires twice | `--done` was not recorded |
+| node shows 🚀 but never gets ⧗ | Monitor not running, or watcher not armed (the ack is a live op) |
 | `mm.py` refuses a file write | correct: Freeplane is open. Use `--live` / `post`, never `--force` |
 
 Live mode cannot create nested structure through `add --live`, but `post` can, because
